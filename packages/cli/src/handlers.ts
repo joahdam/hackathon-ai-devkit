@@ -43,8 +43,12 @@ const validateIdeaImportShape = new Ajv({ allErrors: true }).compile(ideaImportS
 
 export async function cmdSetup(
   store: StateStore,
-  opts: { teamSize?: string; teamSkills?: string; nonInteractive?: boolean },
+  opts: { teamSize?: string; teamSkills?: string; nonInteractive?: boolean; format?: string },
 ): Promise<void> {
+  const format = opts.format ?? 'hackathon';
+  if (format !== 'hackathon' && format !== 'startup-weekend') {
+    return fail(`Unknown --format "${format}".`, 'Supported: hackathon (default) | startup-weekend.');
+  }
   const result = store.init();
   if (!result.ok) return fail(result.error.message, result.error.hint);
 
@@ -71,6 +75,33 @@ export async function cmdSetup(
     if (adapterResult.value.detected_agents.length) {
       info(`Detected agents: ${adapterResult.value.detected_agents.join(', ')}`);
     }
+  }
+
+  if (format === 'startup-weekend') {
+    // No competition brief exists at a Startup Weekend: the input is an idea
+    // voted on Friday night, and the Techstars judging frame is known upfront.
+    // Weights are intentionally null — Techstars publishes categories, not numbers.
+    store.update((s) => {
+      s.competition.name = s.competition.name ?? 'Techstars Startup Weekend';
+      s.competition.type = 'startup-contest';
+      s.competition.remaining_hours = s.competition.remaining_hours ?? 54;
+      s.competition.tracks = [
+        { id: 'main', name: 'General', description: 'Startup Weekend — team forms around an idea voted on Friday night.', sponsor: null, prize: null, required_tools: [] },
+      ];
+      s.competition.judging_criteria = [
+        { name: 'Customer Validation', weight: null, description: 'Real customers interviewed DURING the weekend; evidence of willingness to pay (pre-sales, letters of intent). Commonly the decisive criterion.', source: 'inferred' },
+        { name: 'Business Model', weight: null, description: 'How the venture makes money; acquisition strategy; feasibility of what comes next.', source: 'inferred' },
+        { name: 'Execution & Design', weight: null, description: 'What was actually built in 54h: mockup, prototype, demo.', source: 'inferred' },
+      ];
+      s.gates.competition_gate = 'passed';
+      if (s.delivery.phase === 'setup' || s.delivery.phase === 'competition-intelligence') s.delivery.phase = 'strategy';
+    });
+    success('Setup complete (startup-weekend format — Techstars judging frame preloaded, no brief needed).');
+    info('Validation beats code here. Suggested flow:');
+    info('  Friday night : hadk startup research && hadk startup scorecard   (pick the idea worth joining)');
+    info('  Saturday     : hadk startup validate, then log every conversation: hadk interview log --who "..." --verdict would_pay');
+    info('  Sunday       : hadk interview stats (your traction slide) && hadk judge — and `hadk video skip` (no video at a Startup Weekend)');
+    return;
   }
 
   // Advance phase if still in setup
@@ -637,6 +668,133 @@ export async function cmdNext(store: StateStore, orch: Orchestrator): Promise<vo
   console.log(action.command);
   info(action.description);
   if (action.blocked_by.length) info(`Blocked by: ${action.blocked_by.join('; ')}`);
+}
+
+// ─── interview (field validation capture) ────────────────────────────────────
+//
+// Startup Weekend juries score what the TEAM learned from real humans during
+// the weekend. These commands organize and count that evidence — they never
+// generate it. Every record is a manual entry from a real conversation.
+
+const INTERVIEW_VERDICTS = ['would_pay', 'interested', 'neutral', 'not_interested', 'disconfirming'] as const;
+type InterviewVerdict = (typeof INTERVIEW_VERDICTS)[number];
+
+interface InterviewRecord {
+  id: string;
+  logged_at: string;
+  who: string;
+  verdict: InterviewVerdict;
+  quote: string | null;
+  stated_price: number | null;
+  presale: boolean;
+  channel: string | null;
+  note: string | null;
+}
+
+interface InterviewLog {
+  updated_at: string;
+  interviews: InterviewRecord[];
+}
+
+function loadInterviews(store: StateStore): InterviewLog {
+  const existing = store.readArtifact<InterviewLog>('startup-discovery', 'interviews.yaml');
+  if (existing.ok && Array.isArray(existing.value.interviews)) return existing.value;
+  return { updated_at: nowIso(), interviews: [] };
+}
+
+function tractionSummary(log: InterviewLog) {
+  const byVerdict = Object.fromEntries(INTERVIEW_VERDICTS.map((v) => [v, 0])) as Record<InterviewVerdict, number>;
+  let presales = 0;
+  const prices: number[] = [];
+  for (const i of log.interviews) {
+    byVerdict[i.verdict]++;
+    if (i.presale) presales++;
+    if (i.stated_price !== null) prices.push(i.stated_price);
+  }
+  const total = log.interviews.length;
+  const wouldPay = byVerdict.would_pay;
+  const disconfirming = byVerdict.disconfirming;
+  const medianPrice = prices.length
+    ? [...prices].sort((a, b) => a - b)[Math.floor((prices.length - 1) / 2)]
+    : null;
+  return {
+    total_interviews: total,
+    by_verdict: byVerdict,
+    presales,
+    median_stated_price: medianPrice,
+    traction_line:
+      total === 0
+        ? 'No interviews logged yet.'
+        : `${total} interviews · ${wouldPay} would pay · ${presales} pre-sale(s) · ${disconfirming} disconfirming signal(s)`,
+  };
+}
+
+export async function cmdInterviewLog(
+  store: StateStore,
+  opts: { who?: string; verdict?: string; quote?: string; price?: string; presale?: boolean; channel?: string; note?: string },
+): Promise<void> {
+  ensureInitialized(store);
+  if (!opts.who) return fail('--who is required.', 'Describe the person in a few words, e.g. --who "café owner, ~45, place Royale".');
+  if (!opts.verdict || !INTERVIEW_VERDICTS.includes(opts.verdict as InterviewVerdict)) {
+    return fail(`--verdict must be one of: ${INTERVIEW_VERDICTS.join(', ')}.`);
+  }
+  const price = opts.price === undefined ? null : Number(opts.price);
+  if (price !== null && (!Number.isFinite(price) || price < 0)) return fail('--price must be a non-negative number.');
+
+  const log = loadInterviews(store);
+  const record: InterviewRecord = {
+    id: `int-${(log.interviews.length + 1).toString().padStart(3, '0')}`,
+    logged_at: nowIso(),
+    who: opts.who,
+    verdict: opts.verdict as InterviewVerdict,
+    quote: opts.quote ?? null,
+    stated_price: price,
+    presale: opts.presale ?? false,
+    channel: opts.channel ?? null,
+    note: opts.note ?? null,
+  };
+  log.interviews.push(record);
+  log.updated_at = nowIso();
+  store.writeArtifact('startup-discovery', 'interviews.yaml', log);
+  const summary = tractionSummary(log);
+  store.writeArtifact('startup-discovery', 'traction-summary.yaml', { updated_at: nowIso(), ...summary });
+  store.log('interview', `Logged ${record.id} (${record.verdict}${record.presale ? ', PRE-SALE' : ''}): ${record.who}`);
+
+  success(`Logged ${record.id}: ${record.who} → ${record.verdict}${record.presale ? ' + PRE-SALE 🎉' : ''}`);
+  if (record.verdict === 'disconfirming') {
+    info('Disconfirming signal — good catch. Update the validation plan if this repeats.');
+  }
+  info(`Running tally: ${summary.traction_line}`);
+}
+
+export async function cmdInterviewStats(store: StateStore, opts: { json?: boolean }): Promise<void> {
+  ensureInitialized(store);
+  const log = loadInterviews(store);
+  const summary = tractionSummary(log);
+  store.writeArtifact('startup-discovery', 'traction-summary.yaml', { updated_at: nowIso(), ...summary });
+
+  if (opts.json) {
+    console.log(JSON.stringify(summary, null, 2));
+    return;
+  }
+  if (summary.total_interviews === 0) {
+    warn('0 interviews logged. The scorecard does not move until you talk to real humans — go outside.');
+    info('Log one in 15 seconds: hadk interview log --who "..." --verdict interested');
+    return;
+  }
+  console.log(`Interviews        ${summary.total_interviews}`);
+  console.log(`Would pay         ${summary.by_verdict.would_pay}`);
+  console.log(`Interested        ${summary.by_verdict.interested}`);
+  console.log(`Neutral           ${summary.by_verdict.neutral}`);
+  console.log(`Not interested    ${summary.by_verdict.not_interested}`);
+  console.log(`Disconfirming     ${summary.by_verdict.disconfirming}`);
+  console.log(`Pre-sales / LOIs  ${summary.presales}`);
+  if (summary.median_stated_price !== null) console.log(`Median price      ${summary.median_stated_price}`);
+  console.log('');
+  success(`Pitch slide line: "${summary.traction_line}"`);
+  if (summary.by_verdict.disconfirming > summary.by_verdict.would_pay) {
+    warn('More disconfirming signals than willingness to pay — consider a pivot before Sunday.');
+  }
 }
 
 // ─── panic ───────────────────────────────────────────────────────────────────

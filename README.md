@@ -144,7 +144,7 @@ submission) are persisted alongside state.
 
 | Command | Description |
 |---|---|
-| `hadk setup` | Initialize `.hackathon/`, detect environment, install agent adapters. |
+| `hadk setup` | Initialize `.hackathon/`, detect environment, install agent adapters. `--format startup-weekend` preloads the Techstars judging frame (54h, no brief). |
 | `hadk ingest <source>` | Ingest a brief from a URL or file. |
 | `hadk configure` | Update team and competition configuration. |
 | `hadk strategy` | Select strategy mode and taste profile. |
@@ -155,6 +155,7 @@ submission) are persisted alongside state.
 | `hadk startup validate` | Create a falsifiable validation plan. |
 | `hadk startup status [--json]` | Show startup discovery artifacts, blockers, and next action. |
 | `hadk startup next` | Recommend the next valid startup discovery action. |
+| `hadk interview <log\|stats>` | Log real customer conversations in seconds and print the traction tally (interviews, willingness to pay, pre-sales). Evidence is counted, never generated. |
 | `hadk startup adapt-hackathon` | Map hackathon skills to startup workflows. |
 | `hadk scope` | Create and lock the MVP scope (`--unlock` to reopen). |
 | `hadk scaffold` | Generate a project scaffold (`--profile`, `--dry-run`, `--force`). |

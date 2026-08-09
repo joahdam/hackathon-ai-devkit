@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Startup Weekend support**: `hadk setup --format startup-weekend` preloads the Techstars judging frame (Customer Validation / Business Model / Execution & Design), a 54h clock, and skips brief ingestion — at a Startup Weekend the input is an idea voted on Friday night, not a brief.
+- **`hadk interview log` / `hadk interview stats`** — field-validation capture: log each real customer conversation in seconds (verdict, quote, stated price, pre-sale flag) and get the running traction tally juries ask for ("N interviews · X would pay · Y pre-sales"). Evidence is organized and counted, never generated; a pivot warning fires when disconfirming signals outnumber willingness to pay.
+- `playbooks/startup-weekend-54h-playbook.md` — hour-by-hour Friday-to-Sunday playbook where validation is the main thread and code is the supporting act.
 - **`hadk panic`** — emergency triage command: reads the clock, shows a named panic meter (Level 0 "Suspicious calm" → DEFCON 1 "SUBMIT. NOW."), checkpoints state, cuts MVP features not required for the demo or rubric from `freeze_scope` mode onward, and prints a survival plan of runnable commands. `--dry-run` previews the cuts.
 - **`hadk video skip`** — explicitly waives the video gate (with a logged reason) for competitions that judge via live pitch instead of a submitted video. `hadk judge`, `hadk submit`, and the validators honor the skipped gate; the orchestrator treats `skipped` gates as satisfied.
 - Contextual deadline one-liners in `hadk status`, keyed to the current deadline mode.

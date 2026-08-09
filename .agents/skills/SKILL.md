@@ -154,3 +154,5 @@ Time-specific playbooks:
 - `playbooks/24h-hackathon-playbook.md`
 - `playbooks/36h-hackathon-playbook.md`
 - `playbooks/48h-hackathon-playbook.md`
+- `playbooks/startup-weekend-54h-playbook.md`
+- `playbooks/startup-contest-playbook.md`

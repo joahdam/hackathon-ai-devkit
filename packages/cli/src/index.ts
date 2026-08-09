@@ -42,6 +42,8 @@ import {
   cmdRollback,
   cmdReplan,
   cmdDemo,
+  cmdInterviewLog,
+  cmdInterviewStats,
   cmdJudge,
   cmdPanic,
   cmdSubmit,
@@ -78,6 +80,7 @@ program
   .description('Initialize .hackathon/ state, detect repo/agents/package manager, install adapters')
   .option('--team-size <n>', 'team size')
   .option('--team-skills <skills>', 'comma-separated team skills')
+  .option('--format <format>', 'competition format: hackathon (default) | startup-weekend', 'hackathon')
   .option('--non-interactive', 'skip prompts')
   .action(async (opts) => cmdSetup(store(), opts));
 
@@ -450,6 +453,29 @@ video
     }
   });
 
+// ─── interview ───────────────────────────────────────────────────────────────
+const interview = program
+  .command('interview')
+  .description('Capture and count field-validation evidence (real conversations only — never generated)');
+
+interview
+  .command('log')
+  .description('Log one real customer conversation in 15 seconds')
+  .requiredOption('--who <who>', 'who you talked to, e.g. "café owner, ~45, place Royale"')
+  .requiredOption('--verdict <verdict>', 'would_pay | interested | neutral | not_interested | disconfirming')
+  .option('--quote <quote>', 'memorable verbatim from the conversation')
+  .option('--price <amount>', 'price they said they would pay')
+  .option('--presale', 'an actual pre-sale or signed letter of intent')
+  .option('--channel <channel>', 'street | phone | online | event')
+  .option('--note <note>', 'anything else worth remembering')
+  .action(async (opts) => cmdInterviewLog(store(), opts));
+
+interview
+  .command('stats')
+  .description('Show the traction tally (interviews, willingness to pay, pre-sales) — your pitch slide')
+  .option('--json', 'output stable JSON for agents')
+  .action(async (opts) => cmdInterviewStats(store(), opts));
+
 // ─── panic ───────────────────────────────────────────────────────────────────
 program
   .command('panic')
@@ -537,6 +563,8 @@ export {
   cmdRollback,
   cmdReplan,
   cmdDemo,
+  cmdInterviewLog,
+  cmdInterviewStats,
   cmdJudge,
   cmdPanic,
   cmdSubmit,
