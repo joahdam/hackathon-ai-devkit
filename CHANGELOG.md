@@ -5,6 +5,23 @@ All notable changes to the HADK (Hackathon AI DevKit) project are documented in 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`hadk panic`** — emergency triage command: reads the clock, shows a named panic meter (Level 0 "Suspicious calm" → DEFCON 1 "SUBMIT. NOW."), checkpoints state, cuts MVP features not required for the demo or rubric from `freeze_scope` mode onward, and prints a survival plan of runnable commands. `--dry-run` previews the cuts.
+- **`hadk video skip`** — explicitly waives the video gate (with a logged reason) for competitions that judge via live pitch instead of a submitted video. `hadk judge`, `hadk submit`, and the validators honor the skipped gate; the orchestrator treats `skipped` gates as satisfied.
+- Contextual deadline one-liners in `hadk status`, keyed to the current deadline mode.
+- Generated scaffold (`web-ai-fullstack`): multi-provider AI client (Anthropic Claude → Mistral → OpenAI-compatible, plain `fetch`, no SDK dependency) with an input-dependent deterministic offline fallback, and feature services/routes wired to it so the generated app produces a visible result out of the box.
+
+### Fixed
+- Brief parsing no longer leaks the matched keyword into judging criterion names ("Judging Criteria: Innovation" previously produced a criterion literally named "Criteria: Innovation").
+- `hadk scaffold --output <dir>` is now honored by the scaffold and build validators (the output directory is recorded in state instead of `prototype/` being hardcoded).
+- Under 1 hour remaining, `hadk next` no longer recommends `hadk submit` when judge prep is missing (which the handler would refuse); it recommends the runnable `hadk judge` first, and `hadk submit` is allowed to run early in deadline emergency modes.
+- `manifest.yaml`: `hackathon-scope-cutter` requires `hackathon-idea-scoring` again (the beta `startup-validation-plan` is optional, not required).
+- `hadk setup` no longer reports agent instruction files as written when they were preserved as user-owned.
+- Removed a dead ternary that pinned idea confidence regardless of intent.
+- `.agents/` root skill and autonomous workflow now list all 35 skills (strategy, taste, and the 13 startup skills were missing) with a consistent step order.
+
 ## [2.0.7] - 2026-08-02
 
 ### Added

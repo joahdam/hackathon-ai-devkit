@@ -28,7 +28,6 @@ function generateFiles(ctx: ProfileContext): ScaffoldFile[] {
       next: '^15.1.0',
       react: '^19.0.0',
       'react-dom': '^19.0.0',
-      openai: '^4.77.0',
       zod: '^3.24.0',
     },
     devDependencies: {
@@ -80,12 +79,18 @@ export default nextConfig;
   files.push(mkFile('.env.example', `# ${projectName} — environment configuration
 # Copy to .env.local and fill in values.
 
-# AI provider (OpenAI-compatible)
-OPENAI_API_KEY=sk-your-key-here
+# AI provider — set any ONE key. Auto-detected in this order:
+# Anthropic (Claude) → Mistral → OpenAI-compatible.
+# Force a specific provider with AI_PROVIDER=anthropic|mistral|openai
+ANTHROPIC_API_KEY=
+ANTHROPIC_MODEL=claude-sonnet-5
+MISTRAL_API_KEY=
+MISTRAL_MODEL=mistral-large-latest
+OPENAI_API_KEY=
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
 
-# Fallback mode: set to "true" to use canned responses (no API key needed)
+# Fallback mode: set to "true" for deterministic offline responses (no key, no network)
 DEMO_FALLBACK_MODE=false
 
 # App
@@ -93,9 +98,9 @@ NEXT_PUBLIC_APP_NAME=${projectName}
 `));
 
   files.push(mkFile('.env.local', `# Local development defaults (fallback mode — works without API keys)
+ANTHROPIC_API_KEY=
+MISTRAL_API_KEY=
 OPENAI_API_KEY=
-OPENAI_BASE_URL=https://api.openai.com/v1
-OPENAI_MODEL=gpt-4o-mini
 DEMO_FALLBACK_MODE=true
 NEXT_PUBLIC_APP_NAME=${projectName}
 `));
@@ -161,9 +166,12 @@ export async function GET() {
 
   // ─── Core AI service with fallback ─────────────────────────────────────
   files.push(mkFile('src/core/ai/client.ts', `/**
- * AI client with deterministic fallback mode.
- * When DEMO_FALLBACK_MODE=true, returns canned responses so the
- * demo path works without API keys or network access.
+ * Multi-provider AI client with a deterministic offline fallback.
+ *
+ * Provider auto-detection order: Anthropic (Claude) → Mistral → OpenAI-compatible.
+ * Force one with AI_PROVIDER=anthropic|mistral|openai. Uses plain fetch — no SDK
+ * dependency. When DEMO_FALLBACK_MODE=true or no key is set, responses are
+ * deterministic and derived from the input, so the demo works with the wifi down.
  */
 
 export interface AiRequest {
@@ -174,48 +182,99 @@ export interface AiRequest {
 export interface AiResponse {
   text: string;
   model: string;
+  provider: string;
   fallback: boolean;
   latency_ms: number;
 }
 
-const FALLBACK_RESPONSES: Record<string, string> = {
-  default: 'This is a deterministic fallback response. The core mechanism works end-to-end — connect an API key for live inference.',
+type Provider = 'anthropic' | 'mistral' | 'openai';
+
+const PROVIDER_KEYS: Record<Provider, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  mistral: 'MISTRAL_API_KEY',
+  openai: 'OPENAI_API_KEY',
 };
+
+function detectProvider(): Provider | null {
+  const forced = process.env.AI_PROVIDER as Provider | undefined;
+  if (forced && PROVIDER_KEYS[forced] && process.env[PROVIDER_KEYS[forced]]) return forced;
+  if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
+  if (process.env.MISTRAL_API_KEY) return 'mistral';
+  if (process.env.OPENAI_API_KEY) return 'openai';
+  return null;
+}
+
+function fallbackResponse(request: AiRequest, start: number, note?: string): AiResponse {
+  const excerpt = request.prompt.replace(/\\s+/g, ' ').slice(0, 140);
+  return {
+    text: \`\${note ?? '[offline demo]'} Processed \${request.prompt.length} chars: "\${excerpt}" — set ANTHROPIC_API_KEY, MISTRAL_API_KEY, or OPENAI_API_KEY for live inference.\`,
+    model: 'fallback-deterministic',
+    provider: 'fallback',
+    fallback: true,
+    latency_ms: Date.now() - start,
+  };
+}
+
+async function callAnthropic(request: AiRequest): Promise<{ text: string; model: string }> {
+  const model = process.env.ANTHROPIC_MODEL ?? 'claude-sonnet-5';
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': process.env.ANTHROPIC_API_KEY!,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      system: request.context ?? 'You are a helpful assistant.',
+      messages: [{ role: 'user', content: request.prompt }],
+    }),
+  });
+  if (!res.ok) throw new Error(\`Anthropic \${res.status}: \${(await res.text()).slice(0, 200)}\`);
+  const data = await res.json();
+  return { text: data.content?.[0]?.text ?? '', model };
+}
+
+async function callOpenAiCompatible(request: AiRequest, baseUrl: string, key: string, model: string): Promise<{ text: string; model: string }> {
+  const res = await fetch(\`\${baseUrl}/chat/completions\`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: \`Bearer \${key}\` },
+    body: JSON.stringify({
+      model,
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: request.context ?? 'You are a helpful assistant.' },
+        { role: 'user', content: request.prompt },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(\`\${baseUrl} \${res.status}: \${(await res.text()).slice(0, 200)}\`);
+  const data = await res.json();
+  return { text: data.choices?.[0]?.message?.content ?? '', model };
+}
 
 export async function invokeAi(request: AiRequest): Promise<AiResponse> {
   const start = Date.now();
-  const useFallback = process.env.DEMO_FALLBACK_MODE === 'true' || !process.env.OPENAI_API_KEY;
-
-  if (useFallback) {
-    return {
-      text: FALLBACK_RESPONSES[request.prompt.slice(0, 32)] ?? FALLBACK_RESPONSES.default,
-      model: 'fallback-deterministic',
-      fallback: true,
-      latency_ms: Date.now() - start,
-    };
+  const provider = detectProvider();
+  if (process.env.DEMO_FALLBACK_MODE === 'true' || !provider) {
+    return fallbackResponse(request, start);
   }
 
-  const { OpenAI } = await import('openai');
-  const client = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-    baseURL: process.env.OPENAI_BASE_URL,
-  });
-
-  const completion = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: request.context ?? 'You are a helpful assistant.' },
-      { role: 'user', content: request.prompt },
-    ],
-    max_tokens: 1024,
-  });
-
-  return {
-    text: completion.choices[0]?.message?.content ?? '',
-    model: process.env.OPENAI_MODEL ?? 'gpt-4o-mini',
-    fallback: false,
-    latency_ms: Date.now() - start,
-  };
+  try {
+    let out: { text: string; model: string };
+    if (provider === 'anthropic') {
+      out = await callAnthropic(request);
+    } else if (provider === 'mistral') {
+      out = await callOpenAiCompatible(request, 'https://api.mistral.ai/v1', process.env.MISTRAL_API_KEY!, process.env.MISTRAL_MODEL ?? 'mistral-large-latest');
+    } else {
+      out = await callOpenAiCompatible(request, process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1', process.env.OPENAI_API_KEY!, process.env.OPENAI_MODEL ?? 'gpt-4o-mini');
+    }
+    return { ...out, provider, fallback: false, latency_ms: Date.now() - start };
+  } catch (e) {
+    // Degrade visibly, never die mid-demo: note the provider error and fall back.
+    return fallbackResponse(request, start, \`[\${provider} error: \${String(e).slice(0, 80)} — fallback]\`);
+  }
 }
 `));
 
@@ -296,8 +355,10 @@ export async function POST(request: NextRequest) {
     if (!mapping) continue;
 
     for (const route of mapping.routes) {
+      const svc = mapping.services[0];
+      const svcImport = svc ? '@/' + svc.replace(/^src\//, '').replace(/\.ts$/, '') : null;
       files.push(mkFile(route, `import { NextRequest, NextResponse } from 'next/server';
-
+${svcImport ? `import { execute${comp} } from '${svcImport}';\n` : ''}
 /**
  * Feature: ${featureId}
  *
@@ -307,7 +368,6 @@ export async function POST(request: NextRequest) {
  * - All endpoints return structured JSON with error handling
  */
 export async function GET(request: NextRequest) {
-  // TODO: wire to feature service — return real state
   return NextResponse.json({
     feature: '${featureId}',
     status: 'ok',
@@ -316,13 +376,17 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  let body: unknown;
   try {
-    const body = await request.json();
-    // TODO: delegate to feature service
-    return NextResponse.json({ feature: '${featureId}', received: body, result: 'not-implemented' });
+    body = await request.json();
   } catch {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
+${svcImport
+  ? `  const output = await execute${comp}({ data: body });
+  return NextResponse.json({ feature: '${featureId}', ...output });`
+  : `  // TODO: delegate to feature service
+  return NextResponse.json({ feature: '${featureId}', received: body, result: 'not-implemented' });`}
 }
 `));
     }
@@ -345,8 +409,13 @@ export function ${comp}() {
     for (const service of mapping.services) {
       files.push(mkFile(service, `/**
  * Service: ${featureId}
- * Implement core business logic here.
+ *
+ * Wired to the AI client so the demo path produces a visible, input-dependent
+ * result out of the box (offline via DEMO_FALLBACK_MODE, live with any API key).
+ * Replace the prompt with the feature's real core mechanism.
  */
+
+import { invokeAi } from '@/core/ai/client';
 
 export interface ${comp}Input {
   data: unknown;
@@ -354,12 +423,30 @@ export interface ${comp}Input {
 
 export interface ${comp}Output {
   success: boolean;
-  result: unknown;
+  result: {
+    text: string;
+    model: string;
+    provider: string;
+    fallback: boolean;
+    latency_ms: number;
+  };
 }
 
 export async function execute${comp}(input: ${comp}Input): Promise<${comp}Output> {
-  // TODO: implement core mechanism for ${featureId}
-  return { success: true, result: input.data };
+  const response = await invokeAi({
+    prompt: \`Feature "${featureId}": process this input and return a concise, demo-ready result.\\n\\nInput: \${JSON.stringify(input.data)}\`,
+    context: 'You are the "${featureId}" service of ${projectName}. Answer concisely — the output is shown live in a demo.',
+  });
+  return {
+    success: true,
+    result: {
+      text: response.text,
+      model: response.model,
+      provider: response.provider,
+      fallback: response.fallback,
+      latency_ms: response.latency_ms,
+    },
+  };
 }
 `));
     }

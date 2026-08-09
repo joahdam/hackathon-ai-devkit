@@ -43,6 +43,7 @@ import {
   cmdReplan,
   cmdDemo,
   cmdJudge,
+  cmdPanic,
   cmdSubmit,
   cmdDoctor,
   cmdUpdate,
@@ -415,6 +416,26 @@ video
   });
 
 video
+  .command('skip')
+  .description('Skip the video gate when the competition does not require a demo video')
+  .option('--reason <reason>', 'why the video is skipped', 'Competition does not require a demo video (e.g. live pitch only).')
+  .action(async (opts) => {
+    const st = store();
+    const loaded = st.load();
+    if (!loaded.ok) return fail(loaded.error.message);
+    if (loaded.value.gates.video_gate === 'passed') {
+      return fail('Video gate already passed — nothing to skip.');
+    }
+    st.update((s) => {
+      s.gates.video_gate = 'skipped';
+      if (s.delivery.phase === 'video') s.delivery.phase = 'judge';
+    });
+    st.log('video', `Video gate skipped: ${opts.reason}`);
+    success(`Video gate skipped: ${opts.reason}`);
+    info('Next: hadk judge');
+  });
+
+video
   .command('validate')
   .description('Validate the generated video project')
   .action(async () => {
@@ -429,6 +450,16 @@ video
     }
   });
 
+// ─── panic ───────────────────────────────────────────────────────────────────
+program
+  .command('panic')
+  .description('Emergency triage: read the clock, cut scope to the demo path, print the survival plan')
+  .option('--dry-run', 'show what panic would cut without changing state')
+  .action(async (opts) => {
+    const st = store();
+    return cmdPanic(st, new Orchestrator(st), opts);
+  });
+
 // ─── judge ───────────────────────────────────────────────────────────────────
 program
   .command('judge')
@@ -440,7 +471,10 @@ program
   .command('submit')
   .description('Prepare and validate the submission package')
   .requiredOption('--repository <url>', 'public repository URL for the submission')
-  .action(async (opts) => cmdSubmit(store(), opts));
+  .action(async (opts) => {
+    const st = store();
+    return cmdSubmit(st, new Orchestrator(st), opts);
+  });
 
 // ─── update ──────────────────────────────────────────────────────────────────
 program
@@ -504,6 +538,7 @@ export {
   cmdReplan,
   cmdDemo,
   cmdJudge,
+  cmdPanic,
   cmdSubmit,
   cmdDoctor,
   cmdUpdate,

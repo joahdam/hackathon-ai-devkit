@@ -98,6 +98,8 @@ export interface CompetitionState {
     status: 'unselected' | 'selected' | 'generated' | 'invalidated';
     invalidation_reason?: string;
     stale_since?: string;
+    /** Scaffold output directory relative to the project root (default: prototype). */
+    output_dir?: string;
     decisions: ArchitectureDecision[];
     feature_mapping: Record<string, FeatureMapping>;
   };

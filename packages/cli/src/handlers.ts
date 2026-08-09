@@ -10,7 +10,9 @@
 import {
   type CompetitionState,
   type CandidateIdea,
+  type DeadlineMode,
   type SelectedIdea,
+  DEADLINE_POLICIES,
   SCORING_WEIGHTS,
   STRATEGY_MODES,
   TASTE_OPTIONS,
@@ -354,7 +356,7 @@ export async function cmdIdea(store: StateStore, opts: { count?: string; agent?:
   // not actual agent execution. Report them honestly so we do not over-claim.
   const hasDeclaredIntent = !!(opts.agent || opts.provider);
   const generationMode = hasDeclaredIntent ? 'declared_intent' : 'heuristic_fallback';
-  const confidence: 'low' | 'medium' | 'high' = hasDeclaredIntent ? 'low' : 'low';
+  const confidence: 'low' | 'medium' | 'high' = 'low';
 
   if (generationMode === 'heuristic_fallback') {
     info('Running in heuristic mode — ideas are deterministic skeletons. Use --agent-handoff for agent-driven idea research.');
@@ -623,6 +625,7 @@ export async function cmdStatus(store: StateStore, orch: Orchestrator, opts: { j
   if (report.next_action.blocked_by.length) {
     info(`Blocked by: ${report.next_action.blocked_by.join('; ')}`);
   }
+  console.log(`\n${PANIC_LEVELS[report.deadline_mode].one_liner}`);
 }
 
 export async function cmdNext(store: StateStore, orch: Orchestrator): Promise<void> {
@@ -634,6 +637,100 @@ export async function cmdNext(store: StateStore, orch: Orchestrator): Promise<vo
   console.log(action.command);
   info(action.description);
   if (action.blocked_by.length) info(`Blocked by: ${action.blocked_by.join('; ')}`);
+}
+
+// ─── panic ───────────────────────────────────────────────────────────────────
+
+interface PanicLevel {
+  index: number;
+  label: string;
+  one_liner: string;
+}
+
+const PANIC_LEVELS: Record<DeadlineMode, PanicLevel> = {
+  full: { index: 0, label: 'Level 0 — Suspicious calm', one_liner: 'Plenty of runway. The best time to cut scope is now; the second best is at H-3.' },
+  fast: { index: 1, label: 'Level 1 — Double espresso', one_liner: 'The clock is real now. Ship the demo path first, admire your architecture later.' },
+  demo_first: { index: 2, label: 'Level 2 — Demo or die', one_liner: 'If it is not on the demo path, it does not exist.' },
+  freeze_scope: { index: 3, label: 'Level 3 — The scope is lava', one_liner: 'Scope is frozen. New ideas go to the post-hackathon shrine.' },
+  no_new_features: { index: 4, label: 'Level 4 — Hands off the keyboard', one_liner: 'Polish, rehearse, submit. Nothing else.' },
+  submission_only: { index: 5, label: 'DEFCON 1 — SUBMIT. NOW.', one_liner: 'Stop reading this. Run `hadk panic`.' },
+};
+
+function panicMeter(mode: DeadlineMode): string {
+  const idx = PANIC_LEVELS[mode].index;
+  return `[${'█'.repeat(idx + 1)}${'░'.repeat(5 - idx)}]`;
+}
+
+const SURVIVAL_COMMANDS: Record<string, string> = {
+  strategy: 'hadk strategy',
+  idea: 'hadk idea',
+  scope: 'hadk scope',
+  architecture: 'hadk scaffold',
+  scaffold: 'hadk scaffold',
+  build: 'hadk validate build',
+  demo: 'hadk demo',
+  video: 'hadk video generate   (or `hadk video skip` if no video is required)',
+  judge: 'hadk judge',
+  submission: 'hadk submit --repository <url>',
+};
+
+export async function cmdPanic(store: StateStore, orch: Orchestrator, opts: { dryRun?: boolean }): Promise<void> {
+  ensureInitialized(store);
+  const loaded = store.load();
+  if (!loaded.ok) return fail(loaded.error.message);
+  const state = loaded.value;
+
+  const remaining = orch.computeRemainingHours(state);
+  const mode = orch.getDeadlineMode(state);
+  const level = PANIC_LEVELS[mode];
+  const policy = DEADLINE_POLICIES[mode];
+
+  console.log('');
+  console.log(`  Panic meter ${panicMeter(mode)} ${level.label}`);
+  console.log(`  Time remaining: ${remaining !== null ? `${remaining}h` : 'unknown — set a deadline with `hadk configure --deadline <iso>`'}`);
+  console.log('');
+
+  // Triage: from demo_first onward, everything not needed for demo or rubric gets cut.
+  const cuttable =
+    level.index >= PANIC_LEVELS.demo_first.index && state.scope.status === 'locked'
+      ? state.scope.mvp_features.filter((f) => !f.required_for_demo && !f.required_for_rubric)
+      : [];
+
+  if (cuttable.length > 0) {
+    if (opts.dryRun) {
+      warn(`Would cut ${cuttable.length} feature(s) not on the demo path: ${cuttable.map((f) => f.name).join(', ')}`);
+    } else {
+      const checkpoint = store.createCheckpoint('pre-panic');
+      if (!checkpoint.ok) return fail(`Could not checkpoint before panicking: ${checkpoint.error.message}`);
+      const cutIds = new Set(cuttable.map((f) => f.id));
+      store.update((s) => {
+        s.scope.deferred_features.push(
+          ...cuttable.map((f) => ({ id: f.id, name: f.name, reason_deferred: `Cut by hadk panic at ${remaining ?? '?'}h remaining.` })),
+        );
+        s.scope.mvp_features = s.scope.mvp_features.filter((f) => !cutIds.has(f.id));
+      });
+      store.log('panic', `Panic triage at ${remaining ?? '?'}h (${mode}): cut ${cuttable.length} feature(s) — ${cuttable.map((f) => f.name).join(', ')}. Checkpoint ${checkpoint.value.id}.`);
+      success(`Cut ${cuttable.length} feature(s) not on the demo path (checkpoint ${checkpoint.value.id} — \`hadk rollback\` if you regret it):`);
+      for (const f of cuttable) console.log(`    ✂ ${f.name} (${f.estimated_hours}h saved)`);
+    }
+  } else if (level.index >= PANIC_LEVELS.demo_first.index && state.scope.status === 'locked') {
+    success('Scope is already down to the demo path. Nothing left to cut — only to finish.');
+  }
+
+  console.log('');
+  info('Survival plan:');
+  const seen = new Set<string>();
+  for (const op of policy.allowed_operations) {
+    const cmd = SURVIVAL_COMMANDS[op];
+    if (cmd && !seen.has(cmd)) {
+      seen.add(cmd);
+      console.log(`    ${seen.size}. ${cmd}`);
+    }
+  }
+  const next = orch.getNextAction(state);
+  console.log('');
+  info(`Do this next: ${next.command}`);
+  console.log(`  ${level.one_liner}`);
 }
 
 // ─── checkpoint / rollback / replan ─────────────────────────────────────────
@@ -700,8 +797,11 @@ export async function cmdJudge(store: StateStore): Promise<void> {
   if (!loaded.ok) return fail(loaded.error.message);
   const state = loaded.value;
 
-  if (state.gates.video_gate !== 'passed') {
-    return fail('Video gate has not passed.', 'Run `hadk video render` and resolve any render blocker first.');
+  if (state.gates.video_gate !== 'passed' && state.gates.video_gate !== 'skipped') {
+    return fail(
+      'Video gate has not passed.',
+      'Run `hadk video render`, or `hadk video skip --reason "..."` if this competition does not require a video.',
+    );
   }
 
   const criteria = state.competition.judging_criteria.map((c) => c.name);
@@ -719,14 +819,23 @@ export async function cmdJudge(store: StateStore): Promise<void> {
   success('Judge preparation artifact written to .hackathon/artifacts/pitch/.');
 }
 
-export async function cmdSubmit(store: StateStore, opts: { repository?: string }): Promise<void> {
+export async function cmdSubmit(store: StateStore, orch: Orchestrator, opts: { repository?: string }): Promise<void> {
   ensureInitialized(store);
   const loaded = store.load();
   if (!loaded.ok) return fail(loaded.error.message);
   const state = loaded.value;
 
-  if (state.delivery.phase !== 'submission' || !store.listArtifacts('pitch').includes('judge-prep.yaml')) {
-    return fail('Judge preparation is required before submission.', 'Run `hadk judge` after the video gate passes.');
+  if (!store.listArtifacts('pitch').includes('judge-prep.yaml')) {
+    return fail('Judge preparation is required before submission.', 'Run `hadk judge` first (use `hadk video skip` if no video is required).');
+  }
+  // Outside the submission phase, only the deadline emergency modes may submit early.
+  const deadlineMode = orch.getDeadlineMode(state);
+  const emergency = deadlineMode === 'submission_only' || deadlineMode === 'no_new_features';
+  if (state.delivery.phase !== 'submission' && !emergency) {
+    return fail(
+      `Not in the submission phase yet (current: ${state.delivery.phase}).`,
+      'Complete the pipeline, or wait for deadline emergency mode which allows submitting early.',
+    );
   }
   if (!opts.repository || !/^https:\/\//.test(opts.repository)) {
     return fail('A public repository URL is required for submission.', 'Run `hadk submit --repository https://github.com/org/repo`.');
@@ -739,11 +848,12 @@ export async function cmdSubmit(store: StateStore, opts: { repository?: string }
     description: `Submission for ${state.competition.name ?? 'competition'}.`,
     repository_link: opts.repository,
     video_artifact: state.delivery.video_status === 'rendered',
+    video_skipped: state.gates.video_gate === 'skipped',
     pitch_artifact: store.listArtifacts('pitch').length > 0,
     sponsor_evidence: state.competition.sponsor_requirements.map((r) => r.sponsor),
     checklist: [
       'Repository link added',
-      'Demo video attached',
+      ...(state.gates.video_gate === 'skipped' ? [] : ['Demo video attached']),
       'Pitch deck attached',
       'Sponsor requirements evidenced',
       'Character limits respected',
@@ -752,7 +862,7 @@ export async function cmdSubmit(store: StateStore, opts: { repository?: string }
   store.update((s) => {
     s.delivery.submission_status = 'ready';
     s.gates.submission_gate = 'passed';
-    if (s.delivery.phase === 'submission') s.delivery.phase = 'complete';
+    s.delivery.phase = 'complete';
   });
   success('Submission package prepared at .hackathon/artifacts/submission/.');
   info('Review the checklist and fill in the repository link before submitting.');
@@ -1281,7 +1391,7 @@ function parseBrief(content: string, source: string) {
 
   // Judging criteria
   const criteria: CompetitionState['competition']['judging_criteria'] = [];
-  const critRegex = /(?:^|\n)\s*(?:[-*]|\d+\.)?\s*(?:judg\w*|criteri\w*|rubric)[:\s]+([^\n]+)/gi;
+  const critRegex = /(?:^|\n)\s*(?:[-*]|\d+\.)?\s*(?:(?:judg\w*|criteri\w*|rubric)\s*)+[:\s]+([^\n]+)/gi;
   while ((m = critRegex.exec(content)) !== null && criteria.length < 10) {
     criteria.push({ name: m[1].trim(), weight: null, description: m[1].trim(), source: 'extracted' });
   }

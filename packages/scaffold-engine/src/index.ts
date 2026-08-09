@@ -174,6 +174,7 @@ export class ScaffoldEngine {
       this.store.update((s) => {
         s.architecture.profile = plan.profile;
         s.architecture.status = 'generated';
+        s.architecture.output_dir = options.output ?? 'prototype';
         s.architecture.feature_mapping = plan.feature_mapping;
         s.gates.architecture_gate = 'passed';
         if (s.delivery.phase === 'scaffold' || s.delivery.phase === 'architecture') {

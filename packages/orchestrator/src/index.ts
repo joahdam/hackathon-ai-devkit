@@ -157,6 +157,18 @@ export class Orchestrator {
 
     // Deadline override: submission-only mode
     if (deadlineMode === 'submission_only' && phase !== 'complete') {
+      // `hadk submit` requires judge prep; recommend the actually-runnable command.
+      const judgePrepReady = this.store.listArtifacts('pitch').includes('judge-prep.yaml');
+      if (!judgePrepReady) {
+        return {
+          command: 'hadk judge',
+          description:
+            'Under 1 hour remaining — prepare judge material now, then submit immediately. If no video is required, run `hadk video skip` first.',
+          phase: 'judge',
+          blocked_by: [],
+          deadline_mode: deadlineMode,
+        };
+      }
       return {
         command: 'hadk submit',
         description: 'Under 1 hour remaining — submission-only mode. Protect existing artifacts and submit.',
@@ -191,7 +203,8 @@ export class Orchestrator {
       const gateKey = GATE_FOR_PHASE[p];
       const gateStatus: GateStatus = gateKey ? state.gates[gateKey] : 'passed';
 
-      if (gateStatus !== 'passed') {
+      // 'skipped' is an explicit, logged decision (e.g. no video required) — treat as satisfied.
+      if (gateStatus !== 'passed' && gateStatus !== 'skipped') {
         const gateCheck = this.checkGate(state, p);
         const command = this.commandForPhase(p);
         const opName = this.operationForPhase(p);
@@ -312,7 +325,7 @@ export class Orchestrator {
     }
 
     const currentGate = GATE_FOR_PHASE[state.delivery.phase];
-    if (currentGate && state.gates[currentGate] !== 'passed') {
+    if (currentGate && state.gates[currentGate] !== 'passed' && state.gates[currentGate] !== 'skipped') {
       const check = this.checkGate(state, state.delivery.phase);
       return err(
         hadkError('GATE_NOT_PASSED', `Cannot advance: gate "${currentGate}" has not passed.`, check.issues),

@@ -106,8 +106,8 @@ skills:
     path: skills/hackathon-scope-cutter
     input_schema: schemas/skills/hackathon-scope-cutter.input.schema.json
     output_schema: schemas/skills/hackathon-scope-cutter.output.schema.json
-    dependencies: [startup-validation-plan]
-    optional_dependencies: [hackathon-idea-scoring]
+    dependencies: [hackathon-idea-scoring]
+    optional_dependencies: [startup-validation-plan]
     produces: [scope]
     consumes: [selected-idea, competition]
     supported_agents: [claude-code, codex, opencode]

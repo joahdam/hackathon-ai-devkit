@@ -149,7 +149,7 @@ submission) are persisted alongside state.
 | `hadk configure` | Update team and competition configuration. |
 | `hadk strategy` | Select strategy mode and taste profile. |
 | `hadk idea` | Generate, score, rank, and select candidate ideas. |
- | `hadk startup research` | Map market pain points before solution ideation. |
+| `hadk startup research` | Map market pain points before solution ideation. |
 | `hadk startup scorecard` | Rank pain points with transparent 1–5 evidence-aware scores. |
 | `hadk startup deep-dive <id>` | Investigate one pain point and seek disconfirming evidence. |
 | `hadk startup validate` | Create a falsifiable validation plan. |
@@ -163,9 +163,10 @@ submission) are persisted alongside state.
 | `hadk checkpoint` | Snapshot state (`--label`). |
 | `hadk rollback` | Restore a checkpoint. |
 | `hadk replan` | Unlock scope and re-plan (`--reason`). |
+| `hadk panic` | Emergency triage: read the clock, cut scope to the demo path, print the survival plan (`--dry-run`). |
 | `hadk validate [target]` | Run validation gates (`state\|registry\|scope\|scaffold\|video\|all\|…`). |
 | `hadk demo` | Validate and prepare the demo path. |
-| `hadk video <plan\|generate\|preview\|render\|validate>` | HyperFrames demo-video pipeline. |
+| `hadk video <plan\|generate\|preview\|render\|validate\|skip>` | HyperFrames demo-video pipeline; `skip` waives the video gate for competitions without a video requirement. |
 | `hadk judge` | Prepare judge Q&A artifacts. |
 | `hadk submit` | Assemble the submission package. |
 | `hadk doctor` | Diagnose the environment. |

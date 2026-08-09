@@ -18,7 +18,12 @@ import {
 } from '@hadk/core';
 import { StateStore } from '@hadk/state-store';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+
+/** Resolve the scaffold output directory recorded in state (default: prototype/). */
+function scaffoldDir(store: StateStore, state: CompetitionState | null): string {
+  return resolve(store.projectRoot, state?.architecture.output_dir ?? 'prototype');
+}
 
 // ─── Issue Helpers ───────────────────────────────────────────────────────────
 
@@ -278,8 +283,8 @@ export function validateScaffold(store: StateStore): ValidationResult {
     return result('scaffold', issues);
   }
 
-  // Look for generated project (default: prototype/)
-  const protoDir = join(store.projectRoot, 'prototype');
+  // Look for the generated project where the scaffold recorded it (default: prototype/)
+  const protoDir = scaffoldDir(store, state);
   if (!existsSync(protoDir)) {
     issues.push(error('SCAFFOLD_DIR_MISSING', `Generated project directory not found: ${protoDir}`));
     return result('scaffold', issues);
@@ -344,6 +349,11 @@ export function validateVideo(store: StateStore): ValidationResult {
   const loaded = store.load();
   if (!loaded.ok) return result('video', [error('STATE_INVALID', loaded.error.message)]);
 
+  if (loaded.value.gates.video_gate === 'skipped') {
+    issues.push(info('VIDEO_SKIPPED', 'Video explicitly skipped (`hadk video skip`) — this competition does not require one.'));
+    return result('video', issues);
+  }
+
   if (!existsSync(videoDir)) {
     issues.push(error('NO_VIDEO_PROJECT', 'No demo-video/ project found. Run `hadk video generate`.'));
     return result('video', issues);
@@ -386,7 +396,7 @@ export function validateSubmission(state: CompetitionState, store: StateStore): 
     issues.push(error('NO_SUBMISSION_ARTIFACTS', 'No submission artifacts prepared. Run `hadk submit`.'));
   }
 
-  if (state.delivery.video_status === 'not_started') {
+  if (state.delivery.video_status === 'not_started' && state.gates.video_gate !== 'skipped') {
     issues.push(error('NO_VIDEO', 'No rendered video artifact for submission.'));
   }
 
@@ -439,10 +449,12 @@ export function runValidator(name: ValidatorName, store: StateStore, hadkRoot: s
 
 export function validateBuild(store: StateStore): ValidationResult {
   const issues: ValidationIssue[] = [];
-  const protoDir = join(store.projectRoot, 'prototype');
+  const loaded = store.isInitialized() ? store.load() : null;
+  const state = loaded?.ok ? loaded.value : null;
+  const protoDir = scaffoldDir(store, state);
 
   if (!existsSync(protoDir)) {
-    issues.push(error('NO_PROJECT', 'No generated project found at prototype/. Run `hadk scaffold`.'));
+    issues.push(error('NO_PROJECT', `No generated project found at ${protoDir}. Run \`hadk scaffold\`.`));
     return result('build', issues);
   }
 
